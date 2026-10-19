@@ -12,6 +12,8 @@ export interface UseAdminCsrfReturn {
   refreshToken: () => Promise<string | null>
   /** true during initial loading */
   isLoading: boolean
+  /** Error that occurred during token fetch (null if no error) */
+  error: Error | null
   /** Wraps a fetch call to automatically include CSRF token and handle 403 errors */
   fetchWithCsrf: (url: string, options?: RequestInit) => Promise<Response>
 }
@@ -22,7 +24,7 @@ export interface UseAdminCsrfReturn {
  * the x-csrf-token header in admin mutations.
  *
  * @example
- * const { token, fetchWithCsrf, isLoading } = useAdminCsrf()
+ * const { token, fetchWithCsrf, isLoading, error } = useAdminCsrf()
  *
  * // Use fetchWithCsrf wrapper for automatic token handling
  * const response = await fetchWithCsrf('/api/admin/users', {
@@ -40,21 +42,29 @@ export interface UseAdminCsrfReturn {
 export function useAdminCsrf(): UseAdminCsrfReturn {
   const [token, setToken] = useState<string | null>(null)
   const [isLoading, setIsLoading] = useState(true)
+  const [error, setError] = useState<Error | null>(null)
 
   const refreshToken = useCallback(async (): Promise<string | null> => {
     setIsLoading(true)
+    setError(null)
     try {
       const res = await fetch('/api/admin/csrf-token')
       if (!res.ok) {
-        logger.warn('[useAdminCsrf] Failed to fetch CSRF token:', res.status)
+        const errorMsg = `Failed to fetch CSRF token: ${res.status}`
+        logger.warn('[useAdminCsrf]', errorMsg)
+        const err = new Error(errorMsg)
+        setError(err)
         setToken(null)
         return null
       }
       const data = (await res.json()) as { token: string }
       setToken(data.token)
+      setError(null)
       return data.token
     } catch (err) {
       logger.warn('[useAdminCsrf] Error fetching CSRF token:', err)
+      const error = err instanceof Error ? err : new Error(String(err))
+      setError(error)
       setToken(null)
       return null
     } finally {
@@ -109,7 +119,7 @@ export function useAdminCsrf(): UseAdminCsrfReturn {
     [token, refreshToken]
   )
 
-  return { token, refreshToken, isLoading, fetchWithCsrf }
+  return { token, refreshToken, isLoading, error, fetchWithCsrf }
 }
 
 /**

@@ -302,7 +302,7 @@ export default function AdminPage() {
   const t = useTranslations('admin');
   const tApp = useTranslations('app');
   const router = useRouter();
-  const { token: csrfToken, isLoading: csrfLoading, fetchWithCsrf } = useAdminCsrf();
+  const { token: csrfToken, isLoading: csrfLoading, error: csrfError, fetchWithCsrf } = useAdminCsrf();
   const [data, setData] = useState<OverviewData | null>(null);
   const [usersData, setUsersData] = useState<UsersData | null>(null);
   const [billingData, setBillingData] = useState<BillingData | null>(null);
@@ -684,6 +684,32 @@ export default function AdminPage() {
     return (
       <div className="flex items-center justify-center h-64">
         <Loader2 className="w-8 h-8 animate-spin text-blue-bright" />
+      </div>
+    );
+  }
+
+  if (csrfError) {
+    return (
+      <div className="flex flex-col items-center justify-center h-[60vh] gap-6">
+        <div className="w-16 h-16 rounded-2xl bg-red-500/20 flex items-center justify-center">
+          <AlertTriangle className="w-8 h-8 text-red-400" />
+        </div>
+        <div className="text-center space-y-2">
+          <h2 className="text-xl font-semibold text-foreground">Connection Error</h2>
+          <p className="text-muted-foreground max-w-md">
+            Failed to connect to the authentication service. Please check your connection and try again.
+          </p>
+          <p className="text-xs text-muted-foreground/70 mt-2">
+            {csrfError.message}
+          </p>
+        </div>
+        <Button 
+          onClick={() => window.location.reload()}
+          className="bg-blue-glow hover:bg-blue-bright text-white"
+        >
+          <Loader2 size={16} className="mr-2" />
+          Retry
+        </Button>
       </div>
     );
   }
