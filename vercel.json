@@ -1,5 +1,5 @@
 {
-  "buildCommand": "pnpm install && pnpm run build",
+  "buildCommand": "pnpm install && cd packages/database && npx prisma generate && cd ../.. && pnpm run build",
   "installCommand": "pnpm install",
   "framework": "nextjs",
   "outputDirectory": ".next"
