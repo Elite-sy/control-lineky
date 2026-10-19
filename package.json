@@ -14,9 +14,9 @@
     "postinstall": "cd packages/database && npx prisma generate"
   },
   "dependencies": {
-    "@lineky/database": "file:./packages/database",
-    "@lineky/platform-auth": "file:./packages/platform-auth",
-    "@lineky/supabase": "file:./packages/supabase",
+    "@lineky/database": "workspace:*",
+    "@lineky/platform-auth": "workspace:*",
+    "@lineky/supabase": "workspace:*",
     "@radix-ui/react-accordion": "^1.2.2",
     "@radix-ui/react-alert-dialog": "^1.1.4",
     "@radix-ui/react-aspect-ratio": "^1.1.1",
