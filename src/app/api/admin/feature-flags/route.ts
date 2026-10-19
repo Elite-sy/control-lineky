@@ -20,6 +20,7 @@ import type { NextRequest } from 'next/server'
 import { withAdminAuth } from '@lineky/platform-auth/admin-guard'
 import { db } from '@lineky/database'
 import { logger } from '@/lib/logger';
+import { createClient as createSupabaseClient } from '@lineky/supabase/server'
 import { logAdminAction } from '@lineky/platform-auth/audit/admin';
 
 export const dynamic = 'force-dynamic'
@@ -32,7 +33,7 @@ export const GET = withAdminAuth(async (_req: NextRequest) => {
   })
 
   return NextResponse.json({ flags })
-}, 'feature-flags:read');
+}, 'feature-flags:read', createSupabaseClient);
 
 // ─── POST: Create feature flag ────────────────────────────────────
 
@@ -76,7 +77,7 @@ export const POST = withAdminAuth(async (req: NextRequest, context) => {
     logger.error('Error creating feature flag:', error)
     return NextResponse.json({ error: 'Erreur lors de la création' }, { status: 500 })
   }
-}, 'feature-flags:write');
+}, 'feature-flags:write', createSupabaseClient);
 
 // ─── PATCH: Toggle / Update feature flag ──────────────────────────
 
@@ -142,7 +143,7 @@ export const PATCH = withAdminAuth(async (req: NextRequest, context) => {
     logger.error('Error updating feature flag:', error)
     return NextResponse.json({ error: 'Erreur lors de la mise à jour' }, { status: 500 })
   }
-}, 'feature-flags:write');
+}, 'feature-flags:write', createSupabaseClient);
 
 // ─── DELETE: Delete feature flag ───────────────────────────────────
 
@@ -176,4 +177,4 @@ export const DELETE = withAdminAuth(async (req: NextRequest, context) => {
     logger.error('Error deleting feature flag:', error)
     return NextResponse.json({ error: 'Erreur lors de la suppression' }, { status: 500 })
   }
-}, 'feature-flags:write');
+}, 'feature-flags:write', createSupabaseClient);

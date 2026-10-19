@@ -21,6 +21,7 @@ import { withAdminAuth } from '@lineky/platform-auth/admin-guard'
 import { getPlatformAdminEmails } from '@lineky/platform-auth'
 import { db } from '@lineky/database'
 import { logger } from '@/lib/logger';
+import { createClient as createSupabaseClient } from '@lineky/supabase/server'
 import { logAdminAction } from '@lineky/platform-auth/audit/admin';
 
 export const dynamic = 'force-dynamic'
@@ -83,7 +84,7 @@ export const GET = withAdminAuth(async (_req: NextRequest) => {
     logger.error('Error listing admins:', error)
     return NextResponse.json({ error: 'Erreur serveur' }, { status: 500 })
   }
-}, 'admins:read');
+}, 'admins:read', createSupabaseClient);
 
 // ─── POST: Add admin ──────────────────────────────────────────────
 
@@ -130,7 +131,7 @@ export const POST = withAdminAuth(async (req: NextRequest, context) => {
     logger.error('Error creating admin:', error)
     return NextResponse.json({ error: 'Erreur lors de l\'ajout' }, { status: 500 })
   }
-}, 'admins:write');
+}, 'admins:write', createSupabaseClient);
 
 // ─── PATCH: Update admin ──────────────────────────────────────────
 
@@ -197,7 +198,7 @@ export const PATCH = withAdminAuth(async (req: NextRequest, context) => {
     logger.error('Error updating admin:', error)
     return NextResponse.json({ error: 'Erreur lors de la mise à jour' }, { status: 500 })
   }
-}, 'admins:write');
+}, 'admins:write', createSupabaseClient);
 
 // ─── DELETE: Remove admin ─────────────────────────────────────────
 
@@ -235,4 +236,4 @@ export const DELETE = withAdminAuth(async (req: NextRequest, context) => {
     logger.error('Error deleting admin:', error)
     return NextResponse.json({ error: 'Erreur lors de la suppression' }, { status: 500 })
   }
-}, 'admins:write');
+}, 'admins:write', createSupabaseClient);

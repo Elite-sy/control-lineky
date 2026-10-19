@@ -16,7 +16,7 @@ import type { NextRequest } from 'next/server'
 import { withAdminAuth } from '@lineky/platform-auth/admin-guard'
 import { db } from '@lineky/database'
 import { logger } from '@/lib/logger';
-
+import { createClient as createSupabaseClient } from '@lineky/supabase/server'
 export const dynamic = 'force-dynamic'
 
 export const GET = withAdminAuth(async (req: NextRequest) => {
@@ -43,7 +43,7 @@ export const GET = withAdminAuth(async (req: NextRequest) => {
     })),
     currentIp: clientIp,
   })
-}, 'security:read');
+}, 'security:read', createSupabaseClient);
 
 export const PATCH = withAdminAuth(async (req: NextRequest, context) => {
   try {
@@ -102,4 +102,4 @@ export const PATCH = withAdminAuth(async (req: NextRequest, context) => {
     logger.error('Error updating IP whitelist:', error)
     return NextResponse.json({ error: 'Erreur lors de la mise à jour' }, { status: 500 })
   }
-}, 'security:write');
+}, 'security:write', createSupabaseClient);

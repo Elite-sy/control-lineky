@@ -11,6 +11,7 @@ import { withAdminAuth } from '@lineky/platform-auth/admin-guard';
 import { db } from '@lineky/database';
 import { invalidateResendApiKeyCache } from '@/services/email-config';
 import { logger } from '@/lib/logger';
+import { createClient as createSupabaseClient } from '@lineky/supabase/server'
 import { logAdminAction } from '@lineky/platform-auth/audit/admin';
 
 export const dynamic = 'force-dynamic';
@@ -73,7 +74,7 @@ export const GET = withAdminAuth(async (req: NextRequest) => {
     logger.error('[Admin SystemConfig] GET error:', message);
     return NextResponse.json({ error: 'Erreur serveur' }, { status: 500 });
   }
-}, 'system-config:read');
+}, 'system-config:read', createSupabaseClient);
 
 /**
  * PUT /api/admin/system-config
@@ -144,4 +145,4 @@ export const PUT = withAdminAuth(async (req: NextRequest, context) => {
     logger.error('[Admin SystemConfig] PUT error:', message);
     return NextResponse.json({ error: 'Erreur serveur' }, { status: 500 });
   }
-}, 'system-config:write');
+}, 'system-config:write', createSupabaseClient);

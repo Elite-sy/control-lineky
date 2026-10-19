@@ -13,6 +13,7 @@ import { NextResponse } from 'next/server'
 import type { NextRequest } from 'next/server'
 import { withAdminAuth } from '@lineky/platform-auth/admin-guard'
 import { db } from '@lineky/database'
+import { createClient as createSupabaseClient } from '@lineky/supabase/server'
 
 export const dynamic = 'force-dynamic'
 
@@ -89,4 +90,4 @@ export const GET = withAdminAuth(async (req: NextRequest) => {
         uniqueActions,
       },
     })
-}, 'audit:read');
+}, 'audit:read', createSupabaseClient);

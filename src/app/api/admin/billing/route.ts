@@ -17,6 +17,7 @@ import type { NextRequest } from 'next/server'
 import { withAdminAuth } from '@lineky/platform-auth/admin-guard'
 import { db } from '@lineky/database'
 import { logger } from '@/lib/logger';
+import { createClient as createSupabaseClient } from '@lineky/supabase/server'
 import { logAdminAction } from '@lineky/platform-auth/audit/admin';
 
 export const dynamic = 'force-dynamic'
@@ -229,7 +230,7 @@ export const GET = withAdminAuth(async (_req: NextRequest) => {
     logger.error('[Admin Billing] Error:', message)
     return NextResponse.json({ error: 'Erreur serveur', debug: message }, { status: 500 })
   }
-}, 'billing:read');
+}, 'billing:read', createSupabaseClient);
 
 // ─── PATCH: Trial Management ─────────────────────────────────────────
 
@@ -411,7 +412,7 @@ export const PATCH = withAdminAuth(async (req: NextRequest, context) => {
     logger.error('[Admin Billing PATCH] Error:', message)
     return NextResponse.json({ error: 'Erreur serveur', debug: message }, { status: 500 })
   }
-}, 'billing:write');
+}, 'billing:write', createSupabaseClient);
 
 // ─── Helpers ─────────────────────────────────────────────────────────
 

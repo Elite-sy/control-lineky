@@ -16,6 +16,7 @@ import type { NextRequest } from 'next/server'
 import { withAdminAuth } from '@lineky/platform-auth/admin-guard'
 import { db } from '@lineky/database'
 import { logger } from '@/lib/logger';
+import { createClient as createSupabaseClient } from '@lineky/supabase/server'
 import { logAdminAction } from '@lineky/platform-auth/audit/admin';
 
 export const dynamic = 'force-dynamic'
@@ -36,7 +37,7 @@ export const GET = withAdminAuth(async (req: NextRequest) => {
   })
 
   return NextResponse.json({ announcements })
-}, 'announcements:read');
+}, 'announcements:read', createSupabaseClient);
 
 // ─── POST: Create announcement ───────────────────────────────────
 
@@ -75,7 +76,7 @@ export const POST = withAdminAuth(async (req: NextRequest, context) => {
     logger.error('Error creating announcement:', error)
     return NextResponse.json({ error: 'Erreur lors de la création' }, { status: 500 })
   }
-}, 'announcements:write');
+}, 'announcements:write', createSupabaseClient);
 
 // ─── DELETE: Remove announcement ─────────────────────────────────
 
@@ -109,7 +110,7 @@ export const DELETE = withAdminAuth(async (req: NextRequest, context) => {
     logger.error('Error deleting announcement:', error)
     return NextResponse.json({ error: 'Erreur lors de la suppression' }, { status: 500 })
   }
-}, 'announcements:write');
+}, 'announcements:write', createSupabaseClient);
 
 // ─── PATCH: Toggle active / update announcement ──────────────────
 
@@ -149,4 +150,4 @@ export const PATCH = withAdminAuth(async (req: NextRequest, context) => {
     logger.error('Error toggling announcement:', error)
     return NextResponse.json({ error: 'Erreur lors de la mise à jour' }, { status: 500 })
   }
-}, 'announcements:write');
+}, 'announcements:write', createSupabaseClient);

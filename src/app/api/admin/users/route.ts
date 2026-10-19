@@ -16,6 +16,7 @@ import type { NextRequest } from 'next/server'
 import { withAdminAuth } from '@lineky/platform-auth/admin-guard'
 import { db } from '@lineky/database'
 import { logger } from '@/lib/logger';
+import { createClient as createSupabaseClient } from '@lineky/supabase/server'
 import { logAdminAction } from '@lineky/platform-auth/audit/admin';
 
 export const dynamic = 'force-dynamic'
@@ -80,7 +81,7 @@ export const GET = withAdminAuth(async (_req: NextRequest) => {
     logger.error('[Admin Users] Error:', message)
     return NextResponse.json({ error: 'Erreur serveur', debug: message }, { status: 500 })
   }
-}, 'users:read');
+}, 'users:read', createSupabaseClient);
 
 // ─── PATCH: Actions admin sur un utilisateur ──────────────────────────────
 
@@ -178,4 +179,4 @@ export const PATCH = withAdminAuth(async (req: NextRequest, context) => {
     logger.error('[Admin Users PATCH] Error:', message)
     return NextResponse.json({ error: 'Erreur serveur', debug: message }, { status: 500 })
   }
-}, 'users:write');
+}, 'users:write', createSupabaseClient);

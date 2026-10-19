@@ -10,6 +10,7 @@ import type { NextRequest } from 'next/server'
 import { withAdminAuth } from '@lineky/platform-auth/admin-guard'
 import { db } from '@lineky/database'
 import { logger } from '@/lib/logger';
+import { createClient as createSupabaseClient } from '@lineky/supabase/server'
 import { logAdminAction } from '@lineky/platform-auth/audit/admin';
 
 export const dynamic = 'force-dynamic'
@@ -45,7 +46,7 @@ export const GET = withAdminAuth(async (_req: NextRequest) => {
     logger.error('[Admin Workspaces] Error:', message)
     return NextResponse.json({ error: 'Erreur serveur', debug: message }, { status: 500 })
   }
-}, 'workspaces:read');
+}, 'workspaces:read', createSupabaseClient);
 
 /**
  * PATCH /api/admin/workspaces
@@ -121,4 +122,4 @@ export const PATCH = withAdminAuth(async (req: NextRequest, context) => {
     logger.error('[Admin Workspaces PATCH] Error:', message)
     return NextResponse.json({ error: 'Erreur serveur', debug: message }, { status: 500 })
   }
-}, 'workspaces:write');
+}, 'workspaces:write', createSupabaseClient);

@@ -10,6 +10,7 @@ import type { NextRequest } from 'next/server'
 import { withAdminAuth } from '@lineky/platform-auth/admin-guard'
 import { db } from '@lineky/database'
 import { logger } from '@/lib/logger';
+import { createClient as createSupabaseClient } from '@lineky/supabase/server'
 
 export const dynamic = 'force-dynamic'
 
@@ -91,4 +92,4 @@ export const GET = withAdminAuth(async (_req: NextRequest) => {
     logger.error('[Admin Overview] Error:', message)
     return NextResponse.json({ error: 'Erreur serveur', debug: message }, { status: 500 })
   }
-}, 'analytics:read');
+}, 'analytics:read', createSupabaseClient);

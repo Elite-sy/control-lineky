@@ -25,7 +25,7 @@ import { TOTP, generateSecret, generateURI } from 'otplib'
 const totp = new TOTP()
 import QRCode from 'qrcode'
 import { logger } from '@/lib/logger';
-
+import { createClient as createSupabaseClient } from '@lineky/supabase/server'
 export const dynamic = 'force-dynamic'
 
 const APP_NAME = 'NightCRM Admin'
@@ -54,7 +54,7 @@ export const POST = withAdminAuth(async (req: NextRequest) => {
     logger.error('2FA error:', error)
     return NextResponse.json({ error: 'Erreur lors de l\'opération 2FA' }, { status: 500 })
   }
-}, 'security:read');
+}, 'security:read', createSupabaseClient);
 
 async function handleSetup(email: string) {
   // Check if already has 2FA

@@ -9,7 +9,7 @@ import { NextResponse } from 'next/server'
 import type { NextRequest } from 'next/server'
 import { withAdminAuth } from '@lineky/platform-auth/admin-guard'
 import { logger } from '@/lib/logger';
-
+import { createClient as createSupabaseClient } from '@lineky/supabase/server'
 export const dynamic = 'force-dynamic'
 
 export const GET = withAdminAuth(async (req: NextRequest) => {
@@ -42,7 +42,7 @@ export const GET = withAdminAuth(async (req: NextRequest) => {
     logger.error('[Admin Analytics PDF] Error:', message)
     return NextResponse.json({ error: 'Erreur serveur', debug: message }, { status: 500 })
   }
-}, 'analytics:read');
+}, 'analytics:read', createSupabaseClient);
 
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 function generateReportHtml(r: unknown): string {

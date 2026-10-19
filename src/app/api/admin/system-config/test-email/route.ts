@@ -10,7 +10,7 @@ import type { NextRequest } from 'next/server';
 import { withAdminAuth } from '@lineky/platform-auth/admin-guard';
 import { sendTestEmail } from '@/services/email';
 import { logger } from '@/lib/logger';
-
+import { createClient as createSupabaseClient } from '@lineky/supabase/server'
 export const dynamic = 'force-dynamic';
 
 export const POST = withAdminAuth(async (req: NextRequest) => {
@@ -50,4 +50,4 @@ export const POST = withAdminAuth(async (req: NextRequest) => {
     logger.error('[Admin SystemConfig] Test email error:', message);
     return NextResponse.json({ error: 'Erreur lors de l\'envoi du test' }, { status: 500 });
   }
-}, 'system-config:write');
+}, 'system-config:write', createSupabaseClient);
