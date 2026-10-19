@@ -1,0 +1,52 @@
+{
+  "name": "@lineky/platform-auth",
+  "version": "0.1.0",
+  "private": true,
+  "main": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "default": "./dist/index.js"
+    },
+    "./platform-admin": {
+      "types": "./dist/platform-admin.d.ts",
+      "default": "./dist/platform-admin.js"
+    },
+    "./permissions": {
+      "types": "./dist/platform-permissions.d.ts",
+      "default": "./dist/platform-permissions.js"
+    },
+    "./admin-guard": {
+      "types": "./dist/admin-guard.d.ts",
+      "default": "./dist/admin-guard.js"
+    },
+    "./csrf": {
+      "types": "./dist/csrf.d.ts",
+      "default": "./dist/csrf.js"
+    },
+    "./audit/admin": {
+      "types": "./dist/audit/admin.d.ts",
+      "default": "./dist/audit/admin.js"
+    }
+  },
+  "scripts": {
+    "build": "tsc",
+    "dev": "tsc --watch",
+    "clean": "rm -rf dist node_modules .turbo",
+    "test": "jest",
+    "test:watch": "jest --watch",
+    "typecheck": "tsc --noEmit"
+  },
+  "dependencies": {
+    "@lineky/database": "workspace:*",
+    "next": "^16.1.1"
+  },
+  "devDependencies": {
+    "@types/jest": "^29.5.14",
+    "@types/node": "^22.10.2",
+    "jest": "^29.7.0",
+    "ts-jest": "^29.2.5",
+    "typescript": "^5.7.2"
+  }
+}

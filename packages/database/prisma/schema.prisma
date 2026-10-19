@@ -1,0 +1,1649 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+// ─────────────────────────────────────────────────────────────────────────────────
+// Multi-User, Organization & Auth
+// ─────────────────────────────────────────────────────────────────────────────────
+
+// P0: User — lien Supabase Auth ↔ Prisma.
+// Le lien se fait via `authUserId` (UUID Supabase auth.users.id).
+// Utilisé par sync-auth-user.ts, rbac.ts, workspace-context.ts, user/me route.
+model User {
+  id               String    @id @default(cuid())
+  authUserId       String    @unique // Supabase Auth UUID (auth.users.id)
+  email            String    @unique
+  fullName         String?
+  avatarUrl        String?
+  isActive         Boolean   @default(true)
+  lastLoginAt      DateTime?
+  emailSignature   String? // HTML email signature (injected into outgoing emails)
+  // P3-8: Optional TOTP 2FA for regular CRM users (mirrors PlatformAdmin fields)
+  twoFactorEnabled Boolean   @default(false)
+  twoFactorSecret  String? // Base32 encoded TOTP secret (encrypted at rest)
+  preferredLanguage String? // UI language preference: 'fr' | 'en' | 'es' | 'nl' | 'de' | 'it' | 'sv'
+  createdAt        DateTime  @default(now())
+  updatedAt        DateTime  @updatedAt
+
+  // Relations
+  memberships       WorkspaceMember[]
+  // P1-3: Owner FK — real relation backing the legacy free-text owner/ownerName columns
+  ownedContacts     Contact[]          @relation("ContactOwner")
+  ownedCompanies    Company[]          @relation("CompanyOwner")
+  ownedDeals        Deal[]             @relation("DealOwner")
+  pushSubscriptions PushSubscription[]
+
+  @@index([authUserId])
+  @@index([email])
+}
+
+// P0: Workspace — tenant / organisation.
+// Le premier utilisateur créé reçoit automatiquement un workspace "default".
+// Utilisé par sync-auth-user.ts, rbac.ts, workspaces route, workspace-context.ts.
+model Workspace {
+  id          String   @id @default(cuid())
+  name        String
+  slug        String   @unique // URL-safe identifier
+  description String?
+  logoUrl     String?
+  plan        String   @default("free") // free, pro, enterprise
+  maxMembers  Int      @default(5)
+  isActive    Boolean  @default(true)
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  // Relations
+  members      WorkspaceMember[]
+  invitations  Invitation[]
+  subscription Subscription?
+
+  // P1: Email configuration
+  emailConfig WorkspaceEmailConfig?
+
+  // P2-A: Enrichment quota (credit-based prospecting)
+  enrichmentQuota EnrichmentQuota?
+
+  @@index([isActive])
+}
+
+// P0: WorkspaceMember — liaison User ↔ Workspace avec rôle.
+// `teamId` est optionnel : un membre peut ne pas être dans une équipe.
+// Utilisé par sync-auth-user.ts, rbac.ts, workspaces route, team route.
+model WorkspaceMember {
+  id          String    @id @default(cuid())
+  userId      String
+  user        User      @relation(fields: [userId], references: [id], onDelete: Cascade)
+  workspaceId String
+  workspace   Workspace @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+  teamId      String?
+  team        Team?     @relation(fields: [teamId], references: [id], onDelete: SetNull)
+  role        String    @default("member") // ADMIN, admin, manager, user, member
+  invitedBy   String? // authUserId of inviter
+  joinedAt    DateTime  @default(now())
+  createdAt   DateTime  @default(now())
+  updatedAt   DateTime  @updatedAt
+
+  @@unique([userId, workspaceId])
+  @@index([workspaceId])
+  @@index([userId])
+  @@index([teamId])
+}
+
+// P0: UserProfile — profil utilisateur léger (RBAC, notifications, dashboard).
+// Utilisé par user-profile.ts, profile route, avatar route, invitations.
+model UserProfile {
+  id          String    @id @default(cuid())
+  userId      String    @unique // Supabase Auth UUID
+  email       String    @unique // lookup by email (invitations, profile)
+  role        String    @default("user") // admin, manager, user
+  displayName String?
+  avatarUrl   String?
+  isActive    Boolean   @default(true)
+  lastLoginAt DateTime?
+  createdAt   DateTime  @default(now())
+  updatedAt   DateTime  @updatedAt
+}
+
+// P0: Team — optional grouping within a workspace.
+// Utilisé par team/route.ts, sync-auth-user.ts (getUserMemberships).
+model Team {
+  id          String   @id @default(cuid())
+  name        String
+  workspaceId String?
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  members WorkspaceMember[]
+
+  @@index([workspaceId])
+}
+
+// P0: Invitation — jetons d'invitation équipe.
+// Utilisé par invitations routes, user-profile.ts (acceptation auto).
+model Invitation {
+  id          String    @id @default(cuid())
+  email       String
+  role        String    @default("user") // admin, manager, user
+  token       String    @unique
+  workspaceId String // workspace cible de l'invitation
+  workspace   Workspace @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+  invitedBy   String? // authUserId of inviter
+  acceptedBy  String? // authUserId of invitee
+  acceptedAt  DateTime?
+  expiresAt   DateTime
+  createdAt   DateTime  @default(now())
+  updatedAt   DateTime  @updatedAt
+
+  @@index([email, acceptedAt])
+  @@index([expiresAt])
+  @@index([workspaceId])
+}
+
+// ─────────────────────────────────────────────────────────────────────────────────
+// Application Models
+// ─────────────────────────────────────────────────────────────────────────────────
+
+// Dashboard: persisted widget layout per user
+model DashboardLayout {
+  id          String   @id @default(cuid())
+  userId      String   @unique // Supabase Auth UUID
+  widgets     Json // WidgetConfig[]
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+  workspaceId String?
+
+  @@index([workspaceId])
+}
+
+// Document storage metadata (local FS or Supabase Storage)
+model Document {
+  id          String    @id @default(cuid())
+  name        String
+  type        String // MIME type
+  category    String // pdf, doc, image, spreadsheet, code, other
+  size        Int // bytes
+  url         String // storage path or key
+  contactId   String?
+  companyId   String?
+  dealId      String?
+  createdBy   String? // authUserId or "system"
+  createdAt   DateTime  @default(now())
+  updatedAt   DateTime  @updatedAt
+  deletedAt   DateTime?
+  workspaceId String?
+
+  @@index([category])
+  @@index([contactId])
+  @@index([companyId])
+  @@index([dealId])
+  @@index([createdAt])
+  @@index([workspaceId])
+}
+
+// ─────────────────────────────────────────────────────────────────────────────────
+// Subscription & Billing Plans
+// AI_RULES.md Rule 8: NO Stripe — Square only.
+// ─────────────────────────────────────────────────────────────────────────────────
+
+// Plan catalog — defines pricing tiers
+model Plan {
+  id            String   @id @default(cuid())
+  name          String   @unique // "free", "pro", "enterprise"
+  displayName   String // "Gratuit", "Pro", "Enterprise"
+  description   String? // Short description shown in pricing UI
+  price         Float    @default(0) // monthly price in EUR
+  yearlyPrice   Float? // yearly price in EUR (if discounted vs 12 * monthly)
+  interval      String   @default("month") // "month" or "year"
+  currency      String   @default("EUR")
+  features      Json? // ["feature1", "feature2", ...]
+  limits        Json? // { contacts: 100, users: 1, pipelines: 3, ... }
+  squarePlanId  String?  @unique // Square catalog item ID (subscription plan variation)
+  squareCardId  String? // Square card ID for auto-pay (optional per plan)
+  stripePriceId String?  @unique // Legacy — kept for migration reference, NOT used
+  active        Boolean  @default(true)
+  popular       Boolean  @default(false) // highlight in pricing UI
+  order         Int      @default(0)
+  createdAt     DateTime @default(now())
+  updatedAt     DateTime @updatedAt
+
+  subscriptions Subscription[]
+}
+
+// Subscription — active subscription per workspace (Square billing)
+// AI_RULES.md Rule 8: NO Stripe — Square only.
+model Subscription {
+  id                   String    @id @default(cuid())
+  workspaceId          String    @unique
+  workspace            Workspace @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+  planId               String
+  plan                 Plan      @relation(fields: [planId], references: [id])
+  status               String    @default("active") // active, past_due, cancelled, trialing, paused, expired
+  currentPeriodStart   DateTime  @default(now())
+  currentPeriodEnd     DateTime?
+  cancelAtPeriodEnd    Boolean   @default(false)
+  // Square integration
+  squareSubscriptionId String?   @unique // Square subscription ID
+  squareCustomerId     String? // Square customer ID
+  squareCardId         String? // Card on file ID for auto-pay
+  // Trial
+  trialStart           DateTime?
+  trialEnd             DateTime?
+  // Billing history
+  lastBilledAt         DateTime? // Last successful charge date
+  nextBillingDate      DateTime? // Upcoming charge date
+  // Metadata
+  metadata             Json? // arbitrary key-value store (campaign source, promo code, etc.)
+  createdAt            DateTime  @default(now())
+  updatedAt            DateTime  @updatedAt
+
+  @@index([status])
+  @@index([workspaceId])
+  @@index([squareSubscriptionId])
+}
+
+// ─────────────────────────────────────────────────────────────────────────────────
+// CRM Models — données métier
+// ─────────────────────────────────────────────────────────────────────────────────
+// ─────────────────────────────────────────────────────────────────────────────────
+
+model Contact {
+  id             String    @id @default(cuid())
+  firstName      String
+  lastName       String
+  email          String    @unique
+  phone          String?
+  jobTitle       String?
+  lifecycleStage String    @default("subscriber") // subscriber, lead, mql, sql, opportunity, customer, evangelist
+  owner          String? // @deprecated — legacy text owner, prefer ownerId
+  ownerId        String?
+  ownerUser      User?     @relation("ContactOwner", fields: [ownerId], references: [id], onDelete: SetNull)
+  address        String?
+  city           String?
+  country        String?
+  website        String?
+  linkedin       String?
+  twitter        String?
+  notes          String?
+  companyId      String?
+  company        Company?  @relation(fields: [companyId], references: [id])
+  createdAt      DateTime  @default(now())
+  updatedAt      DateTime  @updatedAt
+  deletedAt      DateTime?
+  workspaceId    String?
+
+  // Relations existantes
+  deals      Deal[]
+  activities Activity[]
+  tasks      Task[]
+  tickets    Ticket[]
+  emails     Email[]
+  calls      Call[]
+  invoices   Invoice[]
+
+  // A1: Identity
+  salutation    String?
+  mobile        String?
+  avatarUrl     String?
+  personalEmail String?
+  linkedinUrl   String?
+
+  // A1: Address (additional)
+  zip   String?
+  state String?
+
+  // A1: Qualification
+  leadStatus       String?
+  buyingRole       String?
+  persona          String?
+  initialSource    String?
+  latestSource     String?
+  marketableStatus String?
+
+  // A1: Activity/Tracking
+  lastSalesActivity DateTime?
+  lastContactedAt   DateTime?
+  nextActivityDate  DateTime?
+  numVisits         Int?      @default(0)
+  numPageViews      Int?      @default(0)
+
+  // A1: Marketing Email
+  emailOpenCount  Int?     @default(0)
+  emailClickCount Int?     @default(0)
+  emailSentCount  Int?     @default(0)
+  emailOptout     Boolean? @default(false)
+  emailBadAddress Boolean? @default(false)
+
+  // A1: Company Profile
+  companyIndustry String?
+  companySize     String?
+  language        String?
+  timezone        String?
+
+  // A1: Custom notes
+  observation       String?
+  competitors       String?
+  favoriteTopics    String?
+  preferredChannels String?
+
+  // P1: Enrichment tracking
+  lastEnrichedAt    DateTime?
+  enrichmentSources Json?
+  confidenceScore   Int?
+  enrichedFields    Json?
+
+  // P1: Sequence relations
+  sequenceEnrollments SequenceEnrollment[]
+  unsubscriptions     EmailUnsubscribe[]
+  emailReplies        EmailReply[]
+
+  // P2-A: Lead Scoring — composite score + category breakdowns
+  // AI_RULES.md Rule 87: OCTA-LOCKED — exact specification
+  leadScore          Int? // 0-100 composite score (null = not yet scored)
+  leadScoreCategory  String? // "cold" | "warm" | "hot" | "very_hot"
+  leadScoreUpdatedAt DateTime? // when the score was last computed
+  leadScoreSource    String? // "auto" | "manual"
+  leadScoreFirmo     Int? // Firmographic score (max 40)
+  leadScoreBehavior  Int? // Behavioral score (max 35)
+  leadScoreQuality   Int? // Data quality score (max 25)
+  // AI Lead Scoring enhancements — confidence, reasoning, scoring timestamp
+  leadScoreConfidence String?   // "low" | "medium" | "high" — AI confidence level
+  leadScoreReasoning   Json?     // AI reasoning string[] — why this score
+  leadScoredAt         DateTime? // when the AI lead score was last computed
+
+  // Portal Client: new relations
+  clientAccounts ClientAccount[]
+  quotes         Quote[]
+  conversations  Conversation[]
+
+  @@index([workspaceId])
+  @@index([ownerId])
+}
+
+model Company {
+  id             String    @id @default(cuid())
+  name           String
+  domain         String?
+  industry       String?
+  employees      Int?
+  annualRevenue  Float?
+  phone          String?
+  address        String?
+  city           String?
+  country        String?
+  website        String?
+  description    String?
+  type           String    @default("prospect") // prospect, customer, partner, competitor
+  lifecycleStage String    @default("subscriber")
+  createdAt      DateTime  @default(now())
+  updatedAt      DateTime  @updatedAt
+  deletedAt      DateTime?
+  workspaceId    String?
+
+  // Relations existantes
+  contacts   Contact[]
+  deals      Deal[]
+  calls      Call[]
+  invoices   Invoice[]
+  activities Activity[]
+
+  // A2: Additional fields
+  ownerName       String? // @deprecated — legacy text owner, prefer ownerId
+  ownerId         String?
+  ownerUser       User?     @relation("CompanyOwner", fields: [ownerId], references: [id], onDelete: SetNull)
+  leadStatus      String?
+  linkedinUrl     String?
+  lastContactedAt DateTime?
+  firstConversion DateTime?
+  contactAttempts Int?      @default(0)
+  employeeRange   String?
+  revenueRange    String?
+  twitterHandle   String?
+  logoUrl         String?
+  domainStatus    String?
+
+  // P1: Enrichment tracking
+  technologies      Json?
+  lastEnrichedAt    DateTime?
+  enrichmentSources Json? // e.g. { "siren": true, "whois": true, "website": true, "ai": false }
+  confidenceScore   Int? // 0-100 composite score based on enrichment source count
+  enrichedFields    Json? // { "address": "siren", "industry": "siren", "technologies": "website" }
+
+  // P2-A: Lead Scoring — composite score + category breakdowns
+  // AI_RULES.md Rule 87: OCTA-LOCKED — exact specification
+  leadScore          Int? // 0-100 composite score (null = not yet scored)
+  leadScoreCategory  String? // "cold" | "warm" | "hot" | "very_hot"
+  leadScoreUpdatedAt DateTime? // when the score was last computed
+  leadScoreSource    String? // "auto" | "manual"
+  leadScoreFirmo     Int? // Firmographic score (max 40)
+  leadScoreBehavior  Int? // Behavioral score (max 35)
+  leadScoreQuality   Int? // Data quality score (max 25)
+
+  @@index([workspaceId])
+  @@index([ownerId])
+}
+
+model Deal {
+  id              String         @id @default(cuid())
+  title           String
+  amount          Float
+  stage           String         @default("appointment_scheduled")
+  probability     Int            @default(20)
+  closeDate       DateTime?
+  pipeline        String         @default("sales_pipeline")
+  pipelineId      String?
+  pipelineStageId String?
+  pipelineStage   PipelineStage? @relation(fields: [pipelineStageId], references: [id])
+  pipelineModel   Pipeline?      @relation(fields: [pipelineId], references: [id])
+  owner           String? // @deprecated — legacy text owner, prefer ownerId
+  ownerId         String?
+  ownerUser       User?          @relation("DealOwner", fields: [ownerId], references: [id], onDelete: SetNull)
+  description     String?
+  contactId       String?
+  contact         Contact?       @relation(fields: [contactId], references: [id])
+  companyId       String?
+  company         Company?       @relation(fields: [companyId], references: [id])
+  order           Int            @default(0)
+  createdAt       DateTime       @default(now())
+  updatedAt       DateTime       @updatedAt
+  deletedAt       DateTime?
+  workspaceId     String?
+
+  // Portal Client: Deal extensions
+  progressPercent Int       @default(0)   // 0-100, auto-calculated from milestones
+  healthStatus    String    @default("on_track") // on_track | at_risk | delayed
+  startDate       DateTime?
+  endDate         DateTime?
+  affaireType     String?   // construction | consulting | installation | custom
+
+  // Relations existantes
+  activities Activity[]
+  invoices   Invoice[]
+  tasks      Task[]
+
+  // Portal Client: new relations
+  milestones      Milestone[]
+  progressPhotos  ProgressPhoto[]
+  quotes          Quote[]
+  portalMessages  PortalMessage[]
+  conversations   Conversation[]
+
+  @@index([pipelineId])
+  @@index([pipelineStageId])
+  @@index([closeDate])
+  @@index([workspaceId])
+  @@index([ownerId])
+}
+
+model Task {
+  id          String    @id @default(cuid())
+  title       String
+  description String?
+  status      String    @default("todo") // todo, in_progress, completed, deferred
+  priority    String    @default("medium") // low, medium, high
+  dueDate     DateTime?
+  assignedTo  String?
+  type        String    @default("call") // call, email, meeting, todo, follow_up
+  contactId   String?
+  contact     Contact?  @relation(fields: [contactId], references: [id])
+  dealId      String?
+  deal        Deal?     @relation(fields: [dealId], references: [id])
+  createdAt   DateTime  @default(now())
+  updatedAt   DateTime  @updatedAt
+  deletedAt   DateTime?
+
+  // A3: Additional fields
+  queueId           String?
+  queueName         String?
+  recurring         Boolean?   @default(false)
+  recurringInterval Int?
+  recurringUnit     String? // day, week, month, year
+  completedAt       DateTime?
+  queue             TaskQueue? @relation(fields: [queueId], references: [id])
+  workspaceId       String?
+
+  @@index([dealId])
+  @@index([workspaceId])
+}
+
+model Ticket {
+  id          String    @id @default(cuid())
+  subject     String
+  description String?
+  status      String    @default("new") // new, waiting_on_customer, waiting_on_us, resolved, closed
+  priority    String    @default("medium") // low, medium, high, urgent
+  category    String?   // technique, facturation, affaire, autre
+  assignedTo  String?
+  source      String    @default("email") // email, chat, phone, web
+  contactId   String?
+  contact     Contact?  @relation(fields: [contactId], references: [id])
+  createdAt   DateTime  @default(now())
+  updatedAt   DateTime  @updatedAt
+  deletedAt   DateTime?
+  workspaceId String?
+  comments     TicketComment[]
+
+  @@index([workspaceId])
+  @@index([contactId])
+}
+
+model TicketComment {
+  id          String   @id @default(cuid())
+  ticketId    String
+  ticket      Ticket   @relation(fields: [ticketId], references: [id], onDelete: Cascade)
+  body        String
+  author      String   // "client" | "staff"
+  authorName  String
+  authorId    String?  // ClientAccount id (client) or User id (staff)
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  @@index([ticketId])
+}
+
+// ─────────────────────────────────────────────────────────────────────────────────
+// P2: Email Templates — User-created WYSIWYG templates for email composition
+// ─────────────────────────────────────────────────────────────────────────────────
+model EmailTemplate {
+  id          String   @id @default(cuid())
+  name        String // template display name
+  subject     String? // default subject (may contain variables like {{firstName}})
+  bodyHtml    String // HTML body (WYSIWYG content)
+  category    String   @default("general") // sales, onboarding, nurture, followup, general, newsletter
+  isDefault   Boolean  @default(false) // one default per workspace
+  usageCount  Int      @default(0) // times used in composition
+  workspaceId String?
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  // Relations
+  emails Email[]
+
+  @@index([workspaceId])
+  @@index([category])
+}
+
+model Email {
+  id           String         @id @default(cuid())
+  subject      String
+  body         String?
+  from         String
+  to           String
+  status       String         @default("draft") // draft, queued, scheduled, sent, opened, clicked, replied, bounced, failed
+  provider     String? // resend, smtp, console
+  messageId    String? // ID retourné par Resend/SMTP
+  contactId    String?
+  contact      Contact?       @relation(fields: [contactId], references: [id])
+  cc           String? // CC recipients (comma-separated)
+  bcc          String? // BCC recipients (comma-separated)
+  templateId   String? // link to EmailTemplate if composed from template
+  template     EmailTemplate? @relation(fields: [templateId], references: [id])
+  scheduledAt  DateTime? // when the email should be sent (scheduling)
+  sentAt       DateTime?
+  openedAt     DateTime?
+  openedCount  Int            @default(0)
+  clickedAt    DateTime?
+  bouncedAt    DateTime?
+  repliedAt    DateTime? // when a reply was received (auto-detected or manual)
+  failed       Boolean        @default(false)
+  errorMessage String?
+  createdAt    DateTime       @default(now())
+  updatedAt    DateTime       @updatedAt
+  deletedAt    DateTime?
+  workspaceId  String?
+
+  // P1: A/B testing — which variant was used for this email
+  variantId String?
+
+  // P1: Reply detection
+  replies EmailReply[]
+
+  @@index([contactId])
+  @@index([status])
+  @@index([workspaceId])
+  @@index([messageId])
+  @@index([to])
+  @@index([sentAt])
+  @@index([scheduledAt])
+  @@index([templateId])
+}
+
+/// Email reply detection — tracks inbound replies to outbound emails
+model EmailReply {
+  id          String   @id @default(cuid())
+  emailId     String // the original Email that was replied to
+  email       Email    @relation(fields: [emailId], references: [id])
+  from        String // who replied (email address)
+  subject     String? // reply subject line
+  bodyHtml    String?  @db.Text // reply body HTML
+  bodyText    String?  @db.Text // reply body plain text
+  messageId   String? // Message-ID of the reply (for threading)
+  inReplyTo   String? // In-Reply-To header value
+  references  String? // References header value
+  contactId   String? // matched Contact (if found)
+  contact     Contact? @relation(fields: [contactId], references: [id])
+  workspaceId String?
+  createdAt   DateTime @default(now())
+
+  @@index([emailId])
+  @@index([from])
+  @@index([contactId])
+  @@index([workspaceId])
+}
+
+/// Email unsubscribe tracking — one-click opt-out (RGPD/CAN-SPAM compliance)
+model EmailUnsubscribe {
+  id          String   @id @default(cuid())
+  token       String   @unique // cryptographically random token for one-click unsubscribe URL
+  email       String // the unsubscribe email address (lowercase)
+  contactId   String? // link to Contact if found
+  contact     Contact? @relation(fields: [contactId], references: [id])
+  workspaceId String?
+  reason      String   @default("manual") // manual, complaint, spam_report
+  createdAt   DateTime @default(now())
+
+  @@index([token])
+  @@index([email])
+  @@index([workspaceId])
+}
+
+model Call {
+  id           String    @id @default(cuid())
+  title        String
+  notes        String?
+  direction    String    @default("outbound")
+  duration     Int?
+  outcome      String?
+  recordingUrl String?
+  contactId    String?
+  companyId    String?
+  contact      Contact?  @relation(fields: [contactId], references: [id])
+  company      Company?  @relation(fields: [companyId], references: [id])
+  assignedTo   String?
+  activityDate DateTime  @default(now())
+  createdAt    DateTime  @default(now())
+  updatedAt    DateTime  @updatedAt
+  deletedAt    DateTime?
+  workspaceId  String?
+
+  @@index([contactId])
+  @@index([companyId])
+  @@index([activityDate])
+  @@index([workspaceId])
+}
+
+model Activity {
+  id          String   @id @default(cuid())
+  type        String // call, email, meeting, note, task, deal_stage_change, ticket_update
+  title       String
+  description String?
+  contactId   String?
+  contact     Contact? @relation(fields: [contactId], references: [id])
+  dealId      String?
+  deal        Deal?    @relation(fields: [dealId], references: [id])
+  companyId   String?
+  company     Company? @relation(fields: [companyId], references: [id])
+  createdBy   String?
+  createdAt   DateTime @default(now())
+  workspaceId String?
+
+  @@index([workspaceId])
+  @@index([companyId])
+}
+
+model Conversation {
+  id            String    @id @default(cuid())
+  channel       String    @default("chat") // chat, email, sms
+  status        String    @default("open") // open, waiting, closed
+  subject       String?
+  assignedTo    String?
+  contactName   String?
+  contactEmail  String?
+  lastMessage   String?
+  lastMessageAt DateTime?
+  createdAt     DateTime  @default(now())
+  updatedAt     DateTime  @updatedAt
+  deletedAt     DateTime?
+  workspaceId   String?
+
+  // Portal Client: link to Contact and Deal
+  contactId     String?
+  contact       Contact?  @relation(fields: [contactId], references: [id])
+  dealId        String?
+  deal          Deal?     @relation(fields: [dealId], references: [id])
+
+  // Relations existantes
+  messages Message[]
+
+  @@index([workspaceId])
+  @@index([contactId])
+  @@index([dealId])
+}
+
+model Message {
+  id             String       @id @default(cuid())
+  body           String
+  sender         String // "user" or "agent"
+  senderName     String?
+  conversationId String
+  conversation   Conversation @relation(fields: [conversationId], references: [id], onDelete: Cascade)
+  createdAt      DateTime     @default(now())
+  workspaceId    String?
+
+  // Portal Client: message extensions
+  attachments    Json?        // [{ url, name, size, type }]
+  scheduledAt    DateTime?    // for scheduled sends
+  sentAt         DateTime?    // when actually sent
+  readAt         DateTime?    // read receipt
+
+  @@index([workspaceId])
+  @@index([scheduledAt])
+}
+
+// Billing: Invoice
+model Invoice {
+  id          String    @id @default(cuid())
+  number      String    @unique // e.g. "FAC-2025-001"
+  status      String    @default("draft") // draft, sent, paid, partially_paid, overdue, cancelled
+  issuedAt    DateTime  @default(now())
+  dueDate     DateTime?
+  paidAt      DateTime?
+  subtotal    Float     @default(0) // before tax
+  taxRate     Float     @default(20) // percentage
+  taxAmount   Float     @default(0)
+  total       Float     @default(0) // subtotal + taxAmount
+  notes       String?
+  // Relations
+  dealId      String?
+  deal        Deal?     @relation(fields: [dealId], references: [id])
+  contactId   String?
+  contact     Contact?  @relation(fields: [contactId], references: [id])
+  companyId   String?
+  company     Company?  @relation(fields: [companyId], references: [id])
+  // Meta
+  createdAt   DateTime  @default(now())
+  updatedAt   DateTime  @updatedAt
+  deletedAt   DateTime?
+  workspaceId String?
+
+  // Relations existantes
+  lineItems InvoiceLineItem[]
+  payments  Payment[]
+
+  @@index([status])
+  @@index([companyId])
+  @@index([contactId])
+  @@index([dealId])
+  @@index([dueDate])
+  @@index([workspaceId])
+}
+
+// Billing: Product catalog
+model Product {
+  id          String    @id @default(cuid())
+  name        String
+  description String?
+  sku         String?   @unique // stock keeping unit
+  unitPrice   Float     @default(0)
+  taxRate     Float     @default(20) // default tax rate for this product
+  category    String? // e.g. "Service", "Licence", "Consommable"
+  active      Boolean   @default(true)
+  createdAt   DateTime  @default(now())
+  updatedAt   DateTime  @updatedAt
+  deletedAt   DateTime?
+  workspaceId String?
+
+  // Relations existantes
+  lineItems InvoiceLineItem[]
+
+  @@index([category])
+  @@index([active])
+  @@index([workspaceId])
+}
+
+// Billing: Invoice Line Item
+model InvoiceLineItem {
+  id          String   @id @default(cuid())
+  invoiceId   String
+  invoice     Invoice  @relation(fields: [invoiceId], references: [id], onDelete: Cascade)
+  productId   String?
+  product     Product? @relation(fields: [productId], references: [id])
+  description String
+  quantity    Int      @default(1)
+  unitPrice   Float
+  total       Float // quantity * unitPrice
+  order       Int      @default(0)
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+  workspaceId String?
+
+  @@index([invoiceId])
+  @@index([productId])
+  @@index([workspaceId])
+}
+
+// Billing: Payment
+model Payment {
+  id          String   @id @default(cuid())
+  invoiceId   String
+  invoice     Invoice  @relation(fields: [invoiceId], references: [id])
+  amount      Float
+  method      String   @default("bank_transfer") // bank_transfer, credit_card, check, other
+  reference   String? // payment reference / transaction id
+  paidAt      DateTime @default(now())
+  notes       String?
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+  workspaceId String?
+
+  @@index([invoiceId])
+  @@index([paidAt])
+  @@index([workspaceId])
+}
+
+// A4: Custom Field definitions
+model CustomField {
+  id            String    @id @default(cuid())
+  name          String // internal field name (e.g., "avatar_url")
+  label         String // display label (e.g., "URL Avatar")
+  type          String // text, textarea, number, date, select, multiselect, checkbox, url, email, phone
+  entityType    String // contact, company, deal, task, ticket, call
+  options       String? // JSON string: ["option1","option2"] for select/multiselect
+  required      Boolean   @default(false)
+  showInKeyInfo Boolean   @default(true)
+  order         Int       @default(0)
+  fieldGroup    String? // group name: "identity", "address", "qualification", "activity", "marketing", "company_profile", "custom"
+  createdAt     DateTime  @default(now())
+  updatedAt     DateTime  @updatedAt
+  deletedAt     DateTime?
+  workspaceId   String?
+
+  // Relations existantes
+  values CustomFieldValue[]
+
+  @@index([entityType])
+  @@index([entityType, fieldGroup])
+  @@index([workspaceId])
+}
+
+// A5: Custom Field Values
+model CustomFieldValue {
+  id            String      @id @default(cuid())
+  entityId      String // ID of the entity record
+  entityType    String // contact, company, etc.
+  value         String? // stored as string, parsed based on field type
+  customFieldId String
+  customField   CustomField @relation(fields: [customFieldId], references: [id], onDelete: Cascade)
+  createdAt     DateTime    @default(now())
+  updatedAt     DateTime    @updatedAt
+  workspaceId   String?
+
+  @@unique([entityId, entityType, customFieldId])
+  @@index([entityId, entityType])
+  @@index([workspaceId])
+}
+
+// A6: Saved Views
+model SavedView {
+  id          String    @id @default(cuid())
+  name        String // view name displayed in tab
+  entityType  String // contact, company, task, ticket, call, deal
+  isDefault   Boolean   @default(false)
+  isSystem    Boolean   @default(false) // system views can't be deleted
+  filters     String? // JSON: filter definitions
+  sortField   String? // e.g., "createdAt"
+  sortDir     String? // "asc" or "desc"
+  columns     String? // JSON: column definitions
+  tabOrder    Int       @default(0) // order of tabs, first = default
+  createdAt   DateTime  @default(now())
+  updatedAt   DateTime  @updatedAt
+  deletedAt   DateTime?
+  workspaceId String?
+
+  @@index([entityType])
+  @@index([entityType, tabOrder])
+  @@index([workspaceId])
+}
+
+// A7: Task Queues
+model TaskQueue {
+  id          String    @id @default(cuid())
+  name        String
+  description String?
+  createdAt   DateTime  @default(now())
+  updatedAt   DateTime  @updatedAt
+  deletedAt   DateTime?
+  workspaceId String?
+
+  // Relations existantes
+  tasks Task[]
+
+  @@index([workspaceId])
+}
+
+// A8: Notifications
+
+// P2-3: Pipeline model
+model Pipeline {
+  id          String    @id @default(cuid())
+  name        String // e.g. "Pipeline Ventes", "Pipeline Onboarding"
+  description String?
+  isDefault   Boolean   @default(false) // only one default per system (enforced at app level)
+  active      Boolean   @default(true)
+  createdAt   DateTime  @default(now())
+  updatedAt   DateTime  @updatedAt
+  deletedAt   DateTime?
+  workspaceId String?
+
+  // Relations existantes
+  stages PipelineStage[]
+  deals  Deal[]
+
+  @@index([active])
+  @@index([workspaceId])
+}
+
+// P2-3: PipelineStage — dynamic stages for a pipeline
+model PipelineStage {
+  id          String    @id @default(cuid())
+  key         String // machine-readable: e.g. "appointment_scheduled"
+  label       String // display: e.g. "Rendez-vous"
+  color       String    @default("#3b82f6") // hex color
+  probability Int       @default(20) // default win probability %
+  order       Int       @default(0) // visual order in kanban
+  isWon       Boolean   @default(false) // won stages (closed_won)
+  isLost      Boolean   @default(false) // lost stages (closed_lost)
+  pipelineId  String
+  pipeline    Pipeline  @relation(fields: [pipelineId], references: [id], onDelete: Cascade)
+  deals       Deal[]
+  createdAt   DateTime  @default(now())
+  updatedAt   DateTime  @updatedAt
+  deletedAt   DateTime?
+  workspaceId String?
+
+  @@unique([pipelineId, key]) // unique key per pipeline
+  @@index([pipelineId, order])
+  @@index([workspaceId])
+}
+
+model Notification {
+  id          String   @id @default(cuid())
+  type        String // deal_stage_change, task_assigned, ticket_created, ticket_updated, invoice_overdue, comment_added, mention, system
+  title       String // short title displayed in the list
+  body        String? // optional longer description
+  entityType  String? // contact, company, deal, task, ticket, invoice, product
+  entityId    String? // ID of the related entity
+  actionUrl   String? // client-side navigation hint (e.g. "deals", "contacts")
+  read        Boolean  @default(false)
+  userId      String   @default("default") // future: multi-user support — migrer vers FK User.id
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+  workspaceId String?
+
+  @@index([userId, read])
+  @@index([userId, createdAt])
+  @@index([entityType, entityId])
+  @@index([workspaceId])
+}
+
+// ─────────────────────────────────────────────────────────────────────────────────
+// A10: Automation Rules
+// ─────────────────────────────────────────────────────────────────────────────────
+
+model AutomationRule {
+  id            String    @id @default(cuid())
+  name          String
+  description   String?
+  enabled       Boolean   @default(true)
+  // Trigger
+  entityType    String // deal, task, ticket, call
+  triggerEvent  String // created, stage_changed, completed, updated, priority_high
+  triggerConfig Json? // Additional trigger conditions (e.g. { "fromStage": "..." })
+  // Action
+  actionType    String // send_notification, update_field, change_stage, change_priority, change_status
+  actionPayload Json? // Action parameters (e.g. { "message": "...", "value": "..." })
+  // Meta
+  order         Int       @default(0)
+  lastRunAt     DateTime?
+  runCount      Int       @default(0)
+  createdAt     DateTime  @default(now())
+  updatedAt     DateTime  @updatedAt
+  deletedAt     DateTime?
+  workspaceId   String?
+
+  @@index([enabled])
+  @@index([entityType, triggerEvent])
+  @@index([workspaceId])
+}
+
+// ─────────────────────────────────────────────────────────────────────────────────
+// P3-1: Audit Log — full traceability of all CRM actions
+// ─────────────────────────────────────────────────────────────────────────────────
+// Note: AuditLog est system-wide.
+
+model AuditLog {
+  id          String   @id @default(cuid())
+  action      String // created, updated, deleted, stage_changed, status_changed, login, export, import, bulk_delete, bulk_update, toggle
+  entityType  String // contact, company, deal, task, ticket, call, invoice, product, automation, pipeline, pipelineStage, notification, savedView, taskQueue
+  entityId    String? // ID of the affected entity
+  entityTitle String? // Denormalized title for display
+  userId      String? // Who performed the action (email or ID)
+  details     Json? // { old: {...}, new: {...}, fields: ["field1","field2"], summary: "..." }
+  ipAddress   String?
+  userAgent   String?
+  createdAt   DateTime @default(now())
+  workspaceId String?
+
+  @@index([entityType])
+  @@index([entityType, entityId])
+  @@index([userId])
+  @@index([action])
+  @@index([createdAt])
+  @@index([workspaceId])
+}
+
+// ─────────────────────────────────────────────────────────────────────────────────
+// P5: Operational Tools — Announcements, Feature Flags
+// ─────────────────────────────────────────────────────────────────────────────────
+
+model Announcement {
+  id        String    @id @default(cuid())
+  title     String // Short headline
+  body      String? // Full message (markdown supported)
+  type      String    @default("info") // info, warning, maintenance, feature, critical
+  priority  Int       @default(0) // Higher = shown first
+  isActive  Boolean   @default(true)
+  startsAt  DateTime  @default(now())
+  endsAt    DateTime? // If null, announcement stays active until manually deactivated
+  createdBy String? // Admin email who created it
+  createdAt DateTime  @default(now())
+  updatedAt DateTime  @updatedAt
+
+  @@index([isActive])
+  @@index([type])
+  @@index([priority])
+  @@index([startsAt, endsAt])
+}
+
+model FeatureFlag {
+  id                 String   @id @default(cuid())
+  key                String   @unique // e.g. "ai_assistant", "bulk_export", "advanced_analytics"
+  name               String // Human-readable name
+  description        String? // What this flag controls
+  isEnabled          Boolean  @default(true) // Global default
+  // Optional: per-plan override
+  planOverride       Json? // { "free": false, "pro": true, "enterprise": true }
+  // Optional: per-workspace override
+  workspaceOverrides Json? // { "workspaceId1": true, "workspaceId2": false }
+  // Targeting
+  rollout            Int      @default(100) // Percentage rollout (0-100)
+  createdBy          String? // Admin email
+  createdAt          DateTime @default(now())
+  updatedAt          DateTime @updatedAt
+
+  @@index([key])
+  @@index([isEnabled])
+}
+
+// ─────────────────────────────────────────────────────────────────────────────────
+// P6: Security & Compliance — Platform Admins, 2FA, IP Whitelist
+// ─────────────────────────────────────────────────────────────────────────────────
+
+model PlatformAdmin {
+  id       String  @id @default(cuid())
+  email    String  @unique
+  role     String  @default("admin") // super_admin, admin, readonly
+  isActive Boolean @default(true)
+
+  // 2FA (TOTP)
+  twoFactorEnabled Boolean @default(false)
+  twoFactorSecret  String? // Base32 encoded TOTP secret (encrypted at rest)
+
+  // IP Whitelist — JSON array of allowed CIDR/IP strings. null = allow all.
+  allowedIps String?
+
+  // Metadata
+  lastLoginAt DateTime?
+  lastLoginIp String?
+  createdBy   String? // Email of the admin who added this entry
+  createdAt   DateTime  @default(now())
+  updatedAt   DateTime  @updatedAt
+
+  @@index([email])
+  @@index([isActive])
+  @@index([role])
+}
+
+// ─────────────────────────────────────────────────────────────────────────────────
+// P1-6: Tags — Polymorphic tagging system for CRM entities
+// ─────────────────────────────────────────────────────────────────────────────────
+
+model Tag {
+  id          String   @id @default(cuid())
+  name        String // Display name, e.g. "VIP", "Lead chaud", "Urgent"
+  color       String   @default("blue") // Tailwind color key: blue, red, green, purple, orange, etc.
+  workspaceId String? // null = global/system tag
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  // Relations — polymorphic via EntityTag
+  entityTags EntityTag[]
+
+  @@unique([name, workspaceId])
+  @@index([workspaceId])
+}
+
+model EntityTag {
+  id          String   @id @default(cuid())
+  tagId       String
+  entityType  String // contact, company, deal, task, ticket, invoice, document, etc.
+  entityId    String // ID of the tagged entity
+  workspaceId String? // denormalized for fast filtering
+  createdAt   DateTime @default(now())
+
+  tag Tag @relation(fields: [tagId], references: [id], onDelete: Cascade)
+
+  @@unique([tagId, entityType, entityId])
+  @@index([entityType, entityId])
+  @@index([entityType, entityId, workspaceId])
+  @@index([tagId])
+  @@index([workspaceId])
+}
+
+// ── User Navigation Preferences ──────────────────────────────────
+// Note: PinnedNavItem.userId est un String (Supabase Auth UUID).
+// Migration future vers FK User.id when all users are migrated.
+model PinnedNavItem {
+  id         String @id @default(cuid())
+  userId     String // Supabase Auth user UUID
+  page       String // Page identifier (e.g. "contacts", "deals")
+  orderIndex Int // Position in sidebar (0 = top)
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@unique([userId, page])
+  @@index([userId])
+}
+
+// ─────────────────────────────────────────────────────────────────────────────────
+// P1: Prospecting Engine — Enrichment Tracking
+// ─────────────────────────────────────────────────────────────────────────────────
+
+// EnrichmentLog — traces every enrichment operation per entity.
+// Used by the hybrid orchestrator to avoid re-fetching recent data and to
+// display enrichment history in the UI.
+model EnrichmentLog {
+  id          String   @id @default(cuid())
+  entityType  String // "company" | "contact"
+  entityId    String // Contact.id or Company.id
+  source      String // "whois" | "siren" | "email-finder" | "email-verifier" | "website-scraper" | "ai-enrichment"
+  status      String // "success" | "error" | "skipped"
+  durationMs  Int? // how long the enrichment took
+  fieldsFound Int? // number of new fields discovered
+  error       String? // error message if failed
+  metadata    Json? // arbitrary metadata (e.g. cache hit, rate limited)
+  workspaceId String?
+  createdAt   DateTime @default(now())
+
+  @@index([entityType, entityId])
+  @@index([source])
+  @@index([workspaceId])
+  @@index([createdAt])
+}
+
+// ─────────────────────────────────────────────────────────────────────────────────
+// P1: Email Sequences — Automated multi-touch campaigns
+// ─────────────────────────────────────────────────────────────────────────────────
+
+// SequenceTemplate — reusable email template with variable support.
+// Variables are wrapped in {{double_curly_braces}}: {{firstName}}, {{company}}, etc.
+model SequenceTemplate {
+  id          String   @id @default(cuid())
+  name        String
+  subject     String // email subject line (may contain variables)
+  bodyHtml    String // HTML body (may contain variables)
+  bodyText    String? // plain text fallback
+  type        String   @default("cold") // cold, followup, reminder, breakup
+  category    String? // e.g. "sales", "onboarding", "nurture"
+  workspaceId String?
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  // Relations
+  steps    SequenceStep[]
+  variants ABVariant[]
+
+  @@index([workspaceId])
+}
+
+// Sequence — a named campaign consisting of ordered steps.
+model Sequence {
+  id          String   @id @default(cuid())
+  name        String
+  description String?
+  status      String   @default("active") // active, archived, draft
+  workspaceId String?
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  // Relations
+  steps       SequenceStep[]
+  enrollments SequenceEnrollment[]
+
+  @@index([workspaceId])
+  @@index([status])
+}
+
+// SequenceStep — a single step within a sequence (an email to send).
+model SequenceStep {
+  id         String            @id @default(cuid())
+  sequenceId String
+  sequence   Sequence          @relation(fields: [sequenceId], references: [id], onDelete: Cascade)
+  order      Int // 1, 2, 3...
+  delayDays  Int               @default(1) // days to wait before sending this step
+  templateId String?
+  template   SequenceTemplate? @relation(fields: [templateId], references: [id])
+  subject    String? // override template subject (optional)
+  bodyHtml   String? // override template body (optional)
+  type       String            @default("cold") // cold, followup, reminder, breakup
+  isActive   Boolean           @default(true)
+  createdAt  DateTime          @default(now())
+  updatedAt  DateTime          @updatedAt
+
+  enrollments SequenceEnrollment[]
+  variants    ABVariant[]
+
+  @@index([sequenceId])
+}
+
+// P1: A/B Testing — variant content for a sequence step
+model ABVariant {
+  id          String            @id @default(cuid())
+  stepId      String
+  step        SequenceStep      @relation(fields: [stepId], references: [id], onDelete: Cascade)
+  name        String            @default("Variante A") // human-readable label
+  subject     String? // override subject for this variant
+  bodyHtml    String?           @db.Text // override body for this variant
+  templateId  String? // alternative template for this variant
+  template    SequenceTemplate? @relation(fields: [templateId], references: [id])
+  isControl   Boolean           @default(true) // true = control (A), false = test (B)
+  splitWeight Int               @default(50) // percentage traffic (e.g. 50 = 50%)
+  createdAt   DateTime          @default(now())
+  updatedAt   DateTime          @updatedAt
+
+  @@index([stepId])
+}
+
+// SequenceEnrollment — tracks a contact's progress through a sequence.
+model SequenceEnrollment {
+  id            String        @id @default(cuid())
+  contactId     String
+  contact       Contact       @relation(fields: [contactId], references: [id], onDelete: Cascade)
+  sequenceId    String
+  sequence      Sequence      @relation(fields: [sequenceId], references: [id], onDelete: Cascade)
+  currentStepId String?
+  currentStep   SequenceStep? @relation(fields: [currentStepId], references: [id])
+  status        String        @default("active") // active, completed, paused, bounced, replied, unsubscribed
+  startedAt     DateTime      @default(now())
+  nextActionAt  DateTime? // when the next step should be sent
+  completedAt   DateTime?
+  pausedAt      DateTime?
+  lastReplyAt   DateTime? // if prospect replied
+  workspaceId   String?
+
+  // P1: A/B testing — which variant was assigned (null = step default)
+  variantId String?
+
+  @@unique([contactId, sequenceId])
+  @@index([status])
+  @@index([nextActionAt])
+  @@index([workspaceId])
+}
+
+// ─────────────────────────────────────────────────────────────────────────────────
+// P1: System Configuration — managed by super admin via Admin UI
+// ─────────────────────────────────────────────────────────────────────────────────
+model SystemConfig {
+  key         String   @id // "EMAIL_PROVIDER", "RESEND_API_KEY", "EMAIL_FROM_FALLBACK", etc.
+  value       String
+  encrypted   Boolean  @default(false)
+  isSensitive Boolean  @default(false)
+  description String?
+  updatedAt   DateTime @updatedAt
+}
+
+// ─────────────────────────────────────────────────────────────────────────────────
+// P1: Email Domain Configuration — per-workspace sending domain
+// Each workspace can configure their own sending email address.
+// NightCRM manages DNS verification via Resend API transparently.
+// ─────────────────────────────────────────────────────────────────────────────────
+model WorkspaceEmailConfig {
+  id          String    @id @default(cuid())
+  workspaceId String    @unique
+  workspace   Workspace @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+
+  // Sending address (user-facing)
+  fromEmail    String? // "contact@acme.com" (what contacts see)
+  fromName     String? // "ACME Corp" (display name)
+  replyToEmail String? // optional reply-to
+
+  // Resend domain integration (backend)
+  resendDomainId String? // Resend domain ID (e.g. "dom_xxx")
+  domain         String? // extracted domain "acme.com"
+  domainStatus   String  @default("none") // none | pending | verified | failed
+
+  // DNS records for display
+  dnsRecords Json? // array of { type, name, value, status }
+
+  // Shared NightCRM domain (zero-config option)
+  useSharedDomain Boolean @default(false)
+
+  // Email credits (P1 billing)
+  emailCreditsMonthly Int       @default(100) // quota from plan
+  emailCreditsUsed    Int       @default(0) // consumed this period
+  emailCreditsBonus   Int       @default(0) // purchased extra credits
+  emailCreditsResetAt DateTime? // when monthly credits reset
+
+  // Tracking
+  verifiedAt DateTime?
+  createdAt  DateTime  @default(now())
+  updatedAt  DateTime  @updatedAt
+
+  @@index([domainStatus])
+}
+
+// ─────────────────────────────────────────────────────────────────────────────────
+// P2-A: EnrichmentQuota — Credit-based quota system for prospecting features
+// AI_RULES.md Rule 86: OCTA-LOCKED — exact specification, no deviations allowed
+// ─────────────────────────────────────────────────────────────────────────────────
+
+model EnrichmentQuota {
+  id          String    @id @default(cuid())
+  workspaceId String    @unique // 1:1 with Workspace
+  workspace   Workspace @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+
+  // Plan-based limits (set when plan changes, copied from Plan.limits.enrichmentCredits)
+  allowedCredits Int @default(20) // Free=20, Pro=500, Enterprise=999999 (unlimited)
+  usedCredits    Int @default(0) // consumed this billing period
+
+  // Period management
+  periodStart     DateTime @default(now()) // current billing period start
+  periodEnd       DateTime // current billing period end (calculated from plan)
+  rolloverCredits Int      @default(0) // unused credits rolled over from previous period
+
+  // Plan type snapshot (denormalized for fast access without joining Workspace)
+  planType String @default("free") // free, pro, enterprise
+
+  // Feature flags per plan (denormalized from Plan.features)
+  features Json? // { bulkExport: bool, onTheFly: bool, icebreaker: bool, leadScoringFull: bool }
+
+  // Admin override
+  overriddenBy    String? // PlatformAdmin.email if manually overridden
+  overrideReason  String? // reason for override
+  overrideCredits Int? // custom credit limit (null = use plan default)
+
+  // Metadata
+  lastConsumedAt DateTime? // last time credits were consumed
+  createdAt      DateTime  @default(now())
+  updatedAt      DateTime  @updatedAt
+
+  @@index([workspaceId])
+  @@index([periodEnd])
+  @@index([planType])
+}
+
+// ─────────────────────────────────────────────────────────────────────────────────
+// P2-6: PushSubscription — persisted Web Push subscriptions (browser push notifications)
+// ─────────────────────────────────────────────────────────────────────────────────
+
+model PushSubscription {
+  id          String   @id @default(cuid())
+  userId      String
+  user        User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  endpoint    String   @unique
+  p256dh      String
+  auth        String
+  userAgent   String?
+  workspaceId String?
+  createdAt   DateTime @default(now())
+
+  @@index([userId])
+  @@index([workspaceId])
+}
+
+// ─────────────────────────────────────────────────────────────────────────────────
+// P1-5: ImportHistory — persisted CSV import job records (survives restarts / other
+// serverless instances, unlike the previous in-memory Map store)
+// ─────────────────────────────────────────────────────────────────────────────────
+
+model ImportHistory {
+  id            String    @id @default(cuid())
+  entity        String // contact, company, deal, task, ticket
+  mode          String // create, merge
+  status        String    @default("processing") // parsing, processing, done, error
+  totalRows     Int       @default(0)
+  processedRows Int       @default(0)
+  createdCount  Int       @default(0)
+  updatedCount  Int       @default(0)
+  skippedCount  Int       @default(0)
+  errorCount    Int       @default(0)
+  errors        Json? // ImportError[]
+  errorMessage  String?
+  fileName      String?
+  userId        String? // who started the import (email or ID — see AuditLog.userId convention)
+  workspaceId   String?
+  startedAt     DateTime  @default(now())
+  finishedAt    DateTime?
+
+  @@index([workspaceId])
+  @@index([userId])
+  @@index([startedAt])
+}
+
+// ─────────────────────────────────────────────────────────────────────────────────
+// Portal Client — New Models
+// ─────────────────────────────────────────────────────────────────────────────────
+
+// Milestone — jalon d'affaire (titre, ordre, statut, date, approbation client)
+model Milestone {
+  id                    String    @id @default(cuid())
+  dealId                String
+  deal                  Deal      @relation(fields: [dealId], references: [id], onDelete: Cascade)
+  title                 String
+  description           String?
+  order                 Int       @default(0)
+  status                String    @default("pending") // pending | in_progress | completed | skipped
+  dueDate               DateTime?
+  completedAt           DateTime?
+  requiresClientApproval Boolean  @default(false)
+  clientApprovedAt      DateTime?
+  clientApprovedBy      String? // ClientAccount id
+  createdBy             String
+  createdAt             DateTime  @default(now())
+  updatedAt             DateTime  @updatedAt
+
+  // Relations
+  progressPhotos ProgressPhoto[]
+  signatures     SignatureRecord[]
+
+  @@index([dealId])
+  @@index([status])
+  @@index([order])
+}
+
+// ProgressPhoto — photo d'avancement (url, légende, date, géoloc, milestoneId)
+model ProgressPhoto {
+  id           String     @id @default(cuid())
+  dealId       String
+  deal         Deal       @relation(fields: [dealId], references: [id], onDelete: Cascade)
+  milestoneId  String?
+  milestone    Milestone? @relation(fields: [milestoneId], references: [id])
+  url          String // Supabase Storage path
+  thumbnailUrl String?
+  caption      String?
+  takenAt      DateTime   @default(now())
+  uploadedBy   String
+  latitude     Float?
+  longitude    Float?
+  createdAt    DateTime   @default(now())
+
+  @@index([dealId])
+  @@index([milestoneId])
+  @@index([takenAt])
+}
+
+// Quote — devis (numéro, statut, montant, PDF, signature, validité)
+model Quote {
+  id          String    @id @default(cuid())
+  number      String    @unique // DEV-2025-001
+  dealId      String?
+  deal        Deal?     @relation(fields: [dealId], references: [id])
+  contactId   String?
+  contact     Contact?  @relation(fields: [contactId], references: [id])
+  subject     String
+  bodyHtml    String
+  total       Float     @default(0)
+  status      String    @default("draft") // draft | sent | viewed | signed | expired | cancelled
+  pdfUrl      String?
+  validUntil  DateTime?
+  sentAt      DateTime?
+  signedAt    DateTime?
+  signedBy    String?
+  createdBy   String
+  workspaceId String?
+  createdAt   DateTime  @default(now())
+  updatedAt   DateTime  @updatedAt
+
+  // Relations
+  lineItems   QuoteLineItem[]
+  signatures  SignatureRecord[]
+
+  @@index([dealId])
+  @@index([contactId])
+  @@index([status])
+  @@index([workspaceId])
+}
+
+// QuoteLineItem — ligne de devis
+model QuoteLineItem {
+  id          String  @id @default(cuid())
+  quoteId     String
+  quote       Quote   @relation(fields: [quoteId], references: [id], onDelete: Cascade)
+  description String
+  quantity    Float   @default(1)
+  unitPrice   Float   @default(0)
+  total       Float   @default(0)
+  order       Int     @default(0)
+
+  @@index([quoteId])
+}
+
+// ClientAccount — compte portail client (contactId, authUserId, rôle, invitation)
+// Multiple accounts per Contact are allowed (multi-role RBAC): each account
+// has a unique email within the same contact. The composite unique constraint
+// on (contactId, email) prevents duplicate accounts for the same email.
+model ClientAccount {
+  id          String    @id @default(cuid())
+  contactId   String
+  contact     Contact   @relation(fields: [contactId], references: [id])
+  authUserId  String?   @unique // Supabase Auth UUID
+  email       String
+  role        String    @default("decision_maker") // decision_maker | finance | ops | viewer
+  status      String    @default("invited") // invited | active | suspended
+  invitedBy   String
+  invitedAt   DateTime  @default(now())
+  activatedAt DateTime?
+  lastLoginAt DateTime?
+  workspaceId String?
+  createdAt   DateTime  @default(now())
+  updatedAt   DateTime  @updatedAt
+
+  // Portal Push: push notification subscriptions for this client account
+  pushSubscriptions PortalPushSubscription[]
+
+  @@unique([contactId, email])
+  @@index([contactId])
+  @@index([authUserId])
+  @@index([status])
+  @@index([workspaceId])
+}
+
+// PortalPushSubscription — Web Push subscription for portal client notifications.
+// Linked to ClientAccount (not User) because portal clients authenticate via
+// Supabase Auth Magic Link, not the SaaS staff auth.
+model PortalPushSubscription {
+  id              String   @id @default(cuid())
+  clientAccountId String
+  clientAccount   ClientAccount @relation(fields: [clientAccountId], references: [id], onDelete: Cascade)
+  endpoint        String   @unique
+  p256dh          String
+  auth            String
+  userAgent       String?
+  createdAt       DateTime @default(now())
+
+  @@index([clientAccountId])
+}
+
+// SignatureRecord — trace de signature (entité, signataire, données, IP, timestamp)
+model SignatureRecord {
+  id                String    @id @default(cuid())
+  entityType        String // quote | milestone
+  entityId          String
+  signedBy          String // client name
+  signedByAccountId String? // ClientAccount id
+  signatureData     String // base64 canvas data
+  ipAddress         String?
+  userAgent         String?
+  signedAt          DateTime  @default(now())
+  quoteId           String?
+  quote             Quote?    @relation(fields: [quoteId], references: [id])
+  milestoneId       String?
+  milestone         Milestone? @relation(fields: [milestoneId], references: [id])
+
+  @@index([entityType, entityId])
+  @@index([quoteId])
+  @@index([milestoneId])
+}
+
+// PortalMessage — message portail par affaire (body, sender, attachments, readAt)
+model PortalMessage {
+  id              String   @id @default(cuid())
+  dealId          String
+  deal            Deal     @relation(fields: [dealId], references: [id], onDelete: Cascade)
+  body            String
+  sender          String // "client" | "staff"
+  senderName      String
+  senderAccountId String? // ClientAccount id (for client messages)
+  attachments     Json? // [{ url, name, size, type }]
+  readAt          DateTime?
+  isAiGenerated   Boolean  @default(false)
+  metadata        Json? // source info (e.g. email reply audit trail)
+  createdAt       DateTime @default(now())
+
+  @@index([dealId])
+  @@index([sender])
+  @@index([createdAt])
+}
+
+// KnowledgeBaseArticle — article base de connaissances (titre, catégorie, contenu, ordre)
+model KnowledgeBaseArticle {
+  id          String   @id @default(cuid())
+  title       String
+  category    String // demarrage | facturation | affaires | faq
+  bodyHtml    String
+  summary     String?
+  order       Int      @default(0)
+  published   Boolean  @default(false)
+  workspaceId String?
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  @@index([category])
+  @@index([published])
+  @@index([workspaceId])
+}

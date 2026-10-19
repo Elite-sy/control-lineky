@@ -1,0 +1,7 @@
+packages:
+  - '.'
+  - 'packages/*'
+minimumReleaseAgeExclude:
+  - nodemailer@10.1.7
+
+onlyBuiltDependencies: []
