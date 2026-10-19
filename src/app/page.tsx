@@ -1,6 +1,7 @@
 'use client';
 
 import { useState, useEffect, useCallback, useMemo } from 'react';
+import { useRouter } from 'next/navigation';
 import { toast } from 'sonner';
 import {
   Card, CardContent, CardHeader, CardTitle,
@@ -16,7 +17,7 @@ import {
   UserCheck, UserX, ShieldCheck, Trash2, Ban,
   CreditCard,
   BarChart3, Wrench,
-  Lock, Mail,
+  Lock, Mail, LogIn,
 } from 'lucide-react';
 
 import {
@@ -300,7 +301,8 @@ interface SecurityData {
 export default function AdminPage() {
   const t = useTranslations('admin');
   const tApp = useTranslations('app');
-  const { fetchWithCsrf } = useAdminCsrf();
+  const router = useRouter();
+  const { token: csrfToken, isLoading: csrfLoading, fetchWithCsrf } = useAdminCsrf();
   const [data, setData] = useState<OverviewData | null>(null);
   const [usersData, setUsersData] = useState<UsersData | null>(null);
   const [billingData, setBillingData] = useState<BillingData | null>(null);
@@ -311,7 +313,6 @@ export default function AdminPage() {
   const [billingLoading, setBillingLoading] = useState(false);
   const [analyticsLoading, setAnalyticsLoading] = useState(false);
   const [operationsLoading, setOperationsLoading] = useState(false);
-  // Operations sub-states
   const [opsSubTab, setOpsSubTab] = useState<'announcements' | 'feature-flags' | 'support' | 'audit' | 'email'>('announcements');
   const [showNewAnnouncement, setShowNewAnnouncement] = useState(false);
   const [showNewFlag, setShowNewFlag] = useState(false);
@@ -328,21 +329,23 @@ export default function AdminPage() {
   const [twoFaDisableCode, setTwoFaDisableCode] = useState('');
   const [ipWhitelistValue, setIpWhitelistValue] = useState('');
   const [error, setError] = useState<string | null>(null);
+  const [authError, setAuthError] = useState(false);
   const [activeTab, setActiveTab] = useState('overview');
   const [actionLoading, setActionLoading] = useState<string | null>(null);
   const [confirmAction, setConfirmAction] = useState<ConfirmAction | null>(null);
 
-  // ── Search & Filter ──
   const [userSearch, setUserSearch] = useState('');
   const [userStatusFilter, setUserStatusFilter] = useState<'all' | 'active' | 'inactive'>('all');
 
-  // ── Fetch overview ──
   const fetchOverview = useCallback(async () => {
+    if (!csrfToken) return;
+    
     setLoading(true);
     setError(null);
     try {
       const res = await fetchWithCsrf('/api/admin/overview');
-      if (res.status === 403) {
+      if (res.status === 403 || res.status === 401) {
+        setAuthError(true);
         setError(t('accessDenied'));
         return;
       }
@@ -357,15 +360,17 @@ export default function AdminPage() {
     } finally {
       setLoading(false);
     }
-  }, []);
+  }, [csrfToken, fetchWithCsrf, t]);
 
-  // ── Fetch users ──
   const fetchUsers = useCallback(async () => {
+    if (!csrfToken) return;
+    
     setUsersLoading(true);
     try {
       const res = await fetchWithCsrf('/api/admin/users');
-      if (res.status === 403) {
+      if (res.status === 403 || res.status === 401) {
         toast.error(t('accessDenied'));
+        setAuthError(true);
         return;
       }
       if (!res.ok) {
@@ -379,17 +384,23 @@ export default function AdminPage() {
     } finally {
       setUsersLoading(false);
     }
-  }, []);
+  }, [csrfToken, fetchWithCsrf, t]);
 
-  useEffect(() => { fetchOverview(); }, [fetchOverview]);
+  useEffect(() => { 
+    if (csrfToken) {
+      fetchOverview();
+    }
+  }, [csrfToken, fetchOverview]);
 
-  // ── Fetch billing ──
   const fetchBilling = useCallback(async () => {
+    if (!csrfToken) return;
+    
     setBillingLoading(true);
     try {
       const res = await fetchWithCsrf('/api/admin/billing');
-      if (res.status === 403) {
+      if (res.status === 403 || res.status === 401) {
         toast.error(t('accessDenied'));
+        setAuthError(true);
         return;
       }
       if (!res.ok) {
@@ -403,29 +414,29 @@ export default function AdminPage() {
     } finally {
       setBillingLoading(false);
     }
-  }, []);
+  }, [csrfToken, fetchWithCsrf, t]);
 
-  // Charger les users quand on clique sur l'onglet
   useEffect(() => {
-    if (activeTab === 'users' && !usersData && !usersLoading) {
+    if (activeTab === 'users' && !usersData && !usersLoading && csrfToken) {
       fetchUsers();
     }
-  }, [activeTab, usersData, usersLoading, fetchUsers]);
+  }, [activeTab, usersData, usersLoading, csrfToken, fetchUsers]);
 
-  // Charger billing quand on clique sur l'onglet
   useEffect(() => {
-    if (activeTab === 'billing' && !billingData && !billingLoading) {
+    if (activeTab === 'billing' && !billingData && !billingLoading && csrfToken) {
       fetchBilling();
     }
-  }, [activeTab, billingData, billingLoading, fetchBilling]);
+  }, [activeTab, billingData, billingLoading, csrfToken, fetchBilling]);
 
-  // ── Fetch analytics ──
   const fetchAnalytics = useCallback(async () => {
+    if (!csrfToken) return;
+    
     setAnalyticsLoading(true);
     try {
       const res = await fetchWithCsrf('/api/admin/analytics');
-      if (res.status === 403) {
+      if (res.status === 403 || res.status === 401) {
         toast.error(t('accessDenied'));
+        setAuthError(true);
         return;
       }
       if (!res.ok) {
@@ -439,17 +450,17 @@ export default function AdminPage() {
     } finally {
       setAnalyticsLoading(false);
     }
-  }, []);
+  }, [csrfToken, fetchWithCsrf, t]);
 
-  // Charger analytics quand on clique sur l'onglet
   useEffect(() => {
-    if (activeTab === 'analytics' && !analyticsData && !analyticsLoading) {
+    if (activeTab === 'analytics' && !analyticsData && !analyticsLoading && csrfToken) {
       fetchAnalytics();
     }
-  }, [activeTab, analyticsData, analyticsLoading, fetchAnalytics]);
+  }, [activeTab, analyticsData, analyticsLoading, csrfToken, fetchAnalytics]);
 
-  // ── Fetch operations ──
   const fetchOperations = useCallback(async () => {
+    if (!csrfToken) return;
+    
     setOperationsLoading(true);
     try {
       const [annRes, flagsRes, ticketsRes, logsRes] = await Promise.all([
@@ -459,8 +470,9 @@ export default function AdminPage() {
         fetchWithCsrf('/api/admin/audit-logs'),
       ]);
 
-      if (annRes.status === 403 || flagsRes.status === 403) {
+      if (annRes.status === 403 || flagsRes.status === 403 || annRes.status === 401 || flagsRes.status === 401) {
         toast.error(t('accessDenied'));
+        setAuthError(true);
         return;
       }
 
@@ -482,22 +494,23 @@ export default function AdminPage() {
     } finally {
       setOperationsLoading(false);
     }
-  }, []);
+  }, [csrfToken, fetchWithCsrf, t]);
 
-  // Charger operations quand on clique sur l'onglet
   useEffect(() => {
-    if (activeTab === 'operations' && !operationsData && !operationsLoading) {
+    if (activeTab === 'operations' && !operationsData && !operationsLoading && csrfToken) {
       fetchOperations();
     }
-  }, [activeTab, operationsData, operationsLoading, fetchOperations]);
+  }, [activeTab, operationsData, operationsLoading, csrfToken, fetchOperations]);
 
-  // ── Fetch security ──
   const fetchSecurity = useCallback(async () => {
+    if (!csrfToken) return;
+    
     setSecurityLoading(true);
     try {
       const res = await fetchWithCsrf('/api/admin/admins');
-      if (res.status === 403) {
+      if (res.status === 403 || res.status === 401) {
         toast.error(t('accessDenied'));
+        setAuthError(true);
         return;
       }
       const json = await res.json().catch(() => ({ admins: [], total: 0, activeCount: 0 }));
@@ -507,15 +520,14 @@ export default function AdminPage() {
     } finally {
       setSecurityLoading(false);
     }
-  }, []);
+  }, [csrfToken, fetchWithCsrf, t]);
 
   useEffect(() => {
-    if (activeTab === 'security' && !securityData && !securityLoading) {
+    if (activeTab === 'security' && !securityData && !securityLoading && csrfToken) {
       fetchSecurity();
     }
-  }, [activeTab, securityData, securityLoading, fetchSecurity]);
+  }, [activeTab, securityData, securityLoading, csrfToken, fetchSecurity]);
 
-  // ── Operations Actions ──
   async function handleOpsAction(action: string, payload?: Record<string, unknown>) {
     setActionLoading(action);
     try {
@@ -542,7 +554,6 @@ export default function AdminPage() {
     }
   }
 
-  // ── Workspace Actions ──
   async function handleWsAction(wsId: string, action: string, payload?: Record<string, unknown>) {
     setActionLoading(wsId);
     try {
@@ -566,7 +577,6 @@ export default function AdminPage() {
     }
   }
 
-  // ── Billing Actions ──
   async function handleBillingAction(workspaceId: string, action: string, payload?: Record<string, unknown>) {
     setActionLoading(`billing-${workspaceId}`);
     try {
@@ -591,7 +601,6 @@ export default function AdminPage() {
     }
   }
 
-  // ── User Actions ──
   async function handleUserAction(userId: string, action: string, payload?: Record<string, unknown>) {
     setActionLoading(`user-${userId}`);
     try {
@@ -604,7 +613,7 @@ export default function AdminPage() {
       if (res.ok) {
         toast.success(json.message || t('actionApplied', { action }));
         fetchUsers();
-        fetchOverview(); // refresh overview stats
+        fetchOverview();
       } else {
         toast.error(json.error || t('actionError'));
       }
@@ -616,7 +625,6 @@ export default function AdminPage() {
     }
   }
 
-  // ── Helpers ──
   function planLabel(plan: string) {
     const labels: Record<string, string> = { free: t('planFree'), pro: t('planPro'), enterprise: t('planEnterprise') }
     return labels[plan] || plan
@@ -656,14 +664,11 @@ export default function AdminPage() {
     )
   }
 
-  // ── Filtered users ──
   const filteredUsers = useMemo(() => {
     if (!usersData) return [];
     return usersData.users.filter(u => {
-      // Status filter
       if (userStatusFilter === 'active' && !u.isActive) return false;
       if (userStatusFilter === 'inactive' && u.isActive) return false;
-      // Search filter
       if (userSearch) {
         const q = userSearch.toLowerCase();
         return (
@@ -675,7 +680,37 @@ export default function AdminPage() {
     });
   }, [usersData, userSearch, userStatusFilter]);
 
-  // ── Loading ──
+  if (csrfLoading) {
+    return (
+      <div className="flex items-center justify-center h-64">
+        <Loader2 className="w-8 h-8 animate-spin text-blue-bright" />
+      </div>
+    );
+  }
+
+  if (!csrfToken || authError) {
+    return (
+      <div className="flex flex-col items-center justify-center h-[60vh] gap-6">
+        <div className="w-16 h-16 rounded-2xl bg-amber-accent/20 flex items-center justify-center">
+          <Shield className="w-8 h-8 text-amber-accent" />
+        </div>
+        <div className="text-center space-y-2">
+          <h2 className="text-xl font-semibold text-foreground">Authentication Required</h2>
+          <p className="text-muted-foreground max-w-md">
+            You need to sign in with an admin account to access the platform console.
+          </p>
+        </div>
+        <Button 
+          onClick={() => router.push('/auth/signin')}
+          className="bg-blue-glow hover:bg-blue-bright text-white"
+        >
+          <LogIn size={16} className="mr-2" />
+          Sign In
+        </Button>
+      </div>
+    );
+  }
+
   if (loading) {
     return (
       <div className="flex items-center justify-center h-64">
@@ -912,14 +947,12 @@ export default function AdminPage() {
             </div>
           ) : usersData ? (
             <>
-              {/* User Stats */}
               <div className="grid grid-cols-3 gap-4">
                 <KPICard icon={<Users size={18} className="text-blue-bright" />} label={t('total')} value={usersData.stats.total} />
                 <KPICard icon={<UserCheck size={18} className="text-emerald-accent" />} label={t('active')} value={usersData.stats.totalActive} />
                 <KPICard icon={<UserX size={18} className="text-red-400" />} label={t('inactiveUsers')} value={usersData.stats.totalInactive} />
               </div>
 
-              {/* Search & Filter Bar */}
               <div className="flex items-center gap-3">
                 <div className="flex-1 relative">
                   <Search size={14} className="absolute left-3 top-1/2 -translate-y-1/2 text-muted-foreground" />
@@ -947,13 +980,11 @@ export default function AdminPage() {
                 </Button>
               </div>
 
-              {/* Users List */}
               <div className="space-y-2">
                 {filteredUsers.map((u) => (
                   <Card key={u.id} className="bg-muted border-border/30">
                     <CardContent className="p-4">
                       <div className="flex items-center gap-3">
-                        {/* Avatar */}
                         <div className={`w-9 h-9 rounded-full flex items-center justify-center shrink-0 text-sm font-semibold ${
                           u.isActive
                             ? 'bg-blue-bright/20 text-blue-bright'
@@ -962,7 +993,6 @@ export default function AdminPage() {
                           {(u.fullName || u.email).charAt(0).toUpperCase()}
                         </div>
 
-                        {/* Info */}
                         <div className="flex-1 min-w-0">
                           <div className="flex items-center gap-2 flex-wrap">
                             <span className="text-sm font-medium text-foreground truncate">
@@ -974,7 +1004,6 @@ export default function AdminPage() {
                           </div>
                           <p className="text-xs text-muted-foreground truncate">{u.email}</p>
 
-                          {/* Workspaces & Roles */}
                           {u.memberships.length > 0 && (
                             <div className="mt-1.5 flex flex-wrap gap-1">
                               {u.memberships.map((m, i) => (
@@ -990,7 +1019,6 @@ export default function AdminPage() {
                           )}
                         </div>
 
-                        {/* Metadata */}
                         <div className="text-right shrink-0 hidden sm:block">
                           <p className="text-[10px] text-muted-foreground">
                             {t('joinedOn')} {new Date(u.createdAt).toLocaleDateString(currentLocale())}
@@ -1000,7 +1028,6 @@ export default function AdminPage() {
                           </p>
                         </div>
 
-                        {/* Actions */}
                         <DropdownMenu>
                           <DropdownMenuTrigger asChild>
                             <Button size="sm" variant="ghost" className="h-8 w-8 p-0 shrink-0"
@@ -1048,7 +1075,6 @@ export default function AdminPage() {
 
                             <DropdownMenuSeparator className="bg-border" />
 
-                            {/* Change role in each workspace */}
                             {u.memberships.map((m) => (
                               <div key={m.workspace.id}>
                                 <DropdownMenuLabel className="text-[10px] text-muted-foreground px-2 py-1">
@@ -1122,6 +1148,7 @@ export default function AdminPage() {
             onRefresh={fetchAnalytics}
           />
         </TabsContent>
+        
         {/* ═══ EMAIL TAB ═══ */}
         <TabsContent value="email" className="space-y-4 mt-4">
           <div className="space-y-4">
@@ -1227,5 +1254,3 @@ export default function AdminPage() {
     </div>
   )
 }
-
-// ─── Sub-components ────────────────────────────────────────────────
