@@ -49,3 +49,6 @@ packages/*/.next/
 packages/*/dist/
 packages/*/build/
 packages/*/*.tsbuildinfo
+
+.vercel
+.env*

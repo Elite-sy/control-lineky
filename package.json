@@ -4,7 +4,8 @@
   "private": true,
   "scripts": {
     "dev": "next dev -p 3001",
-    "build": "next build",
+    "build": "pnpm run build:packages && next build",
+    "build:packages": "pnpm --filter @lineky/database run build && pnpm --filter @lineky/platform-auth run build && pnpm --filter @lineky/supabase run build",
     "start": "next start",
     "lint": "eslint",
     "test": "jest",
