@@ -14,6 +14,7 @@ import { NextResponse } from 'next/server';
 import type { NextRequest } from 'next/server';
 import { generateCsrfToken, setCsrfCookie } from '@lineky/platform-auth/csrf';
 
+// Cache invalidation
 export const dynamic = 'force-dynamic';
 
 export async function GET(_req: NextRequest) {
