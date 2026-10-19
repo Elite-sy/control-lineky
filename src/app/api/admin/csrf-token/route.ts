@@ -10,6 +10,7 @@ import { NextResponse } from 'next/server';
 import type { NextRequest } from 'next/server';
 import { withAdminAuth } from '@lineky/platform-auth/admin-guard';
 import { generateCsrfToken, setCsrfCookie } from '@lineky/platform-auth/csrf';
+import { createClient } from '@lineky/supabase';
 
 export const dynamic = 'force-dynamic';
 
@@ -23,4 +24,4 @@ export const GET = withAdminAuth(async (_req: NextRequest) => {
   setCsrfCookie(response, token);
   
   return response;
-}, 'system-config:read');
+}, 'system-config:read', createClient);
