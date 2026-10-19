@@ -10,7 +10,7 @@
     "test": "jest",
     "test:watch": "jest --watch",
     "typecheck": "tsc --noEmit",
-    "postinstall": "prisma generate"
+    "postinstall": "cd packages/database && npx prisma generate"
   },
   "dependencies": {
     "@lineky/database": "file:./packages/database",
