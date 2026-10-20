@@ -52,3 +52,9 @@ packages/*/*.tsbuildinfo
 
 .vercel
 .env*
+
+# Health check reports
+HEALTH_CHECK_REPORT.md
+build-check.txt
+test-check.txt
+typecheck.txt
